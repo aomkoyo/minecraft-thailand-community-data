@@ -1,0 +1,50 @@
+name: Fetch and Cache Data
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write 
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create public directory
+        run: mkdir -p public
+
+      - name: Fetch data with ETag caching
+        env:
+          DATA_URL: "https://script.google.com/macros/s/AKfycbxOl1xXzIVBLriJOOI_rdVlWpvA-3i8eC8V0yvoj9UxnGYNQi6wwMwfGeHBBnP0zZk/exec" 
+        run: |
+          # Fetch the data.
+          # --etag-compare reads the existing cache file.
+          # --etag-save writes the new cache file if the server provides one.
+          curl -L -s \
+            --etag-compare public/.etag \
+            --etag-save public/.etag \
+            -o public/data.json \
+            "$DATA_URL"
+
+      - name: Commit and push changes
+        run: |
+          # Set up the GitHub Actions bot git user
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Stage the JSON file and the cache file
+          git add public/data.json public/.etag
+          
+          # Commit and push only if there are changes
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update public/data.json"
+            git push
+            echo "Changes pushed successfully."
+          else
+            echo "Data has not changed. Nothing to commit."
+          fi
