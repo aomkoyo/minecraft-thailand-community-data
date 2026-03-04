@@ -18,33 +18,56 @@ jobs:
       - name: Create public directory
         run: mkdir -p public
 
-      - name: Fetch data with ETag caching
+      - name: Fetch data with ETag caching and Timestamp
         env:
           DATA_URL: "https://script.google.com/macros/s/AKfycbxOl1xXzIVBLriJOOI_rdVlWpvA-3i8eC8V0yvoj9UxnGYNQi6wwMwfGeHBBnP0zZk/exec" 
         run: |
-          # Fetch the data.
-          # --etag-compare reads the existing cache file.
-          # --etag-save writes the new cache file if the server provides one.
+          # ตั้งค่า Timezone เป็นกรุงเทพฯ (UTC+7) และสร้างตัวแปรชื่อไฟล์ mm-dd-hh
+          TIMESTAMP=$(TZ='Asia/Bangkok' date +'%m-%d-%H')
+          NEW_FILENAME="base-${TIMESTAMP}.json"
+          
+          # Fetch ข้อมูลมาเก็บไว้ที่ไฟล์ temp.json ชั่วคราวก่อน
           curl -L -s \
             --etag-compare public/.etag \
             --etag-save public/.etag \
-            -o public/data.json \
+            -o temp.json \
             "$DATA_URL"
+            
+          # ตรวจสอบว่าไฟล์ temp.json มีขนาดมากกว่า 0 byte หรือไม่ (ถ้า ETag ตรงกัน ไฟล์จะว่างเปล่าเพราะไม่ได้โหลดใหม่)
+          if [ -s temp.json ]; then
+            echo "New data fetched. Updating file..."
+            # ลบไฟล์นามสกุลเก่าและไฟล์ data.json เดิมออก
+            rm -f public/base-*.json public/data.json
+            # ย้ายไฟล์ใหม่เข้าไปแทนที่ด้วยชื่อตามชั่วโมง
+            mv temp.json "public/$NEW_FILENAME"
+          else
+            echo "Data not modified (ETag match). Renaming old file to current hour..."
+            # กรณีข้อมูลไม่เปลี่ยน ให้ลบ temp.json ทิ้ง แล้วแค่เปลี่ยนชื่อไฟล์เก่าให้เป็นชั่วโมงล่าสุด
+            rm -f temp.json
+            OLD_FILE=$(ls public/base-*.json 2>/dev/null | head -n 1)
+            
+            # เปลี่ยนชื่อไฟล์เก่า(ถ้ามี) ให้เป็นชื่อชั่วโมงล่าสุด
+            if [ -n "$OLD_FILE" ] && [ "$OLD_FILE" != "public/$NEW_FILENAME" ]; then
+              mv "$OLD_FILE" "public/$NEW_FILENAME"
+            fi
+          fi
+
+          # สร้าง environment variable เก็บชื่อไฟล์ไว้ใช้ใน Step ถัดไป
+          echo "SAVED_FILENAME=$NEW_FILENAME" >> $GITHUB_ENV
 
       - name: Commit and push changes
         run: |
-          # Set up the GitHub Actions bot git user
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # Stage the JSON file and the cache file
-          git add public/data.json public/.etag
+          # Stage ข้อมูลทั้งหมดในโฟลเดอร์ public (รวมถึงการลบไฟล์เก่าและการเพิ่มไฟล์ใหม่)
+          git add public/
           
-          # Commit and push only if there are changes
+          # ตรวจสอบว่ามีการเปลี่ยนแปลงหรือไม่
           if ! git diff --staged --quiet; then
-            git commit -m "chore: update public/data.json"
+            git commit -m "chore: update data to ${{ env.SAVED_FILENAME }}"
             git push
             echo "Changes pushed successfully."
           else
-            echo "Data has not changed. Nothing to commit."
+            echo "No changes in files. Nothing to commit."
           fi
